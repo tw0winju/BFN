@@ -7,6 +7,8 @@ import os
 import random
 import time
 
+import requests
+
 import folium
 import streamlit as st
 from streamlit_folium import st_folium
@@ -431,15 +433,6 @@ with st.sidebar:
         disabled=not bool(st.session_state.selected_place),
     )
 
-    toilet_btn = st.button(
-        "🚻 화장실 긴급 검색",
-        use_container_width=True,
-        disabled=not bool(st.session_state.get("user_lat")),
-        help="현재 위치 기준 가장 가까운 장애인 화장실을 즉시 안내합니다.",
-    )
-    if toilet_btn:
-        st.session_state["emergency_toilet"] = True
-
     # ── 고급 설정 ─────────────────────────────────────────────
     with st.expander("⚙️ 고급 설정 (선택)"):
         st.caption("기본값으로도 충분히 동작합니다.")
@@ -598,6 +591,8 @@ if search_btn:
         )
         prog_bar.empty()
         prog_text.empty()
+        st.session_state["searched_sido"]  = sido
+        st.session_state["searched_gungu"] = gungu
 
     with st.spinner("시설 데이터 처리 중..."):
         st.session_state.norm_facilities = normalize(raw, kakao_key=config.KAKAO_REST_KEY)
@@ -704,84 +699,6 @@ def _tab1_content() -> None:
         st.markdown("**📂 카테고리 재선택**")
         _render_cat_buttons("e")
         return
-
-    # ── 긴급 화장실 찾기 ────────────────────────────────────────
-    if st.session_state.get("emergency_toilet"):
-        st.session_state["emergency_toilet"] = False
-        with st.expander("🚻 긴급 화장실 찾기 결과", expanded=True):
-            _toilet_facs = sorted(
-                [(haversine(user_lat, user_lon, f["lat"], f["lon"]), f)
-                 for f in st.session_state.norm_facilities if f.get("has_toilet")],
-                key=lambda x: x[0],
-            )[:5]
-            if not _toilet_facs:
-                st.warning("현재 검색된 시설 중 장애인 화장실 보유 시설이 없습니다. 검색 지역을 바꿔보세요.")
-            else:
-                _tm = folium.Map(location=[user_lat, user_lon], zoom_start=15)
-                folium.Marker(
-                    [user_lat, user_lon], tooltip="현재 위치",
-                    icon=folium.Icon(color="blue", icon="user", prefix="fa"),
-                ).add_to(_tm)
-                for _ti, (_td, _tf) in enumerate(_toilet_facs):
-                    folium.Marker(
-                        [_tf["lat"], _tf["lon"]],
-                        tooltip=f"{'🥇' if _ti == 0 else f'#{_ti+1}'} {_tf['name']} ({_td:.0f}m)",
-                        icon=folium.Icon(color="red" if _ti == 0 else "orange", icon="info-sign"),
-                    ).add_to(_tm)
-                # 최근접 경로
-                _tn_d, _tn_f = _toilet_facs[0]
-                try:
-                    _tr, _ = _cached_walking_route(user_lat, user_lon, _tn_f["lat"], _tn_f["lon"])
-                    folium.PolyLine(_tr, color="#1565C0", weight=5).add_to(_tm)
-                except Exception:
-                    folium.PolyLine(
-                        [[user_lat, user_lon], [_tn_f["lat"], _tn_f["lon"]]],
-                        color="#1565C0", weight=4, dash_array="8",
-                    ).add_to(_tm)
-                st_folium(_tm, width="100%", height=380, key="toilet_map")
-                for _ti, (_td, _tf) in enumerate(_toilet_facs):
-                    _eta = _td / (user_cfg["speed_mpm"])
-                    st.markdown(
-                        f"**{'🥇' if _ti == 0 else f'#{_ti+1}'}  {_tf['name']}** &nbsp; "
-                        f"{_td:.0f}m · 도보 약 {_eta:.0f}분  \n"
-                        f"<small>{_tf.get('address','')}</small>",
-                        unsafe_allow_html=True,
-                    )
-
-    # ── 지하철 엘리베이터 현황 ────────────────────────────────────
-    if config.SEOUL_OPEN_KEY:
-        with st.expander("🚇 주변 지하철 엘리베이터 현황 (서울)", expanded=False):
-            _elev_rows = _cached_subway_elevators(config.SEOUL_OPEN_KEY)
-            if not _elev_rows:
-                st.warning("서울 열린데이터광장 API 응답이 없습니다.")
-            else:
-                # 현재 위치 기준 역명으로 필터 — 좌표 없으므로 전체 표시 후 검색
-                _search_station = st.text_input(
-                    "역 이름 검색", placeholder="예: 강남, 홍대입구",
-                    key="subway_elev_search",
-                )
-                _filtered = [
-                    r for r in _elev_rows
-                    if not _search_station or _search_station in r.get("STATN_NM", "")
-                ][:50]
-                if not _filtered:
-                    st.info("검색 결과가 없습니다.")
-                else:
-                    _normal   = sum(1 for r in _filtered if "정상" in r.get("ELVTR_STTS", ""))
-                    _broken   = len(_filtered) - _normal
-                    _c1, _c2 = st.columns(2)
-                    _c1.metric("✅ 정상 운행", f"{_normal}대")
-                    _c2.metric("🔴 고장", f"{_broken}대",
-                               delta=f"-{_broken}" if _broken else None,
-                               delta_color="inverse")
-                    for _r in _filtered:
-                        _stts = _r.get("ELVTR_STTS", "")
-                        _icon = "✅" if "정상" in _stts else "🔴"
-                        st.markdown(
-                            f"{_icon} **{_r.get('STATN_NM','')}역** "
-                            f"— {_r.get('ELVTR_LOCA','')} "
-                            f"({_r.get('ELVTR_STTS','')})"
-                        )
 
     # 출발지로부터 거리 계산 후 가까운 순 정렬 (진단 정보 및 UX용)
     _fac_dists = sorted(
@@ -1469,11 +1386,119 @@ def _tab1_content() -> None:
 
 
 
+def _tab3_content() -> None:
+    """접근성 정보 탭 — 긴급 화장실 + 지하철 엘리베이터 현황"""
+    if not st.session_state.get("user_lat") or st.session_state.norm_facilities is None:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.info("📍 먼저 **사이드바**에서 출발 위치를 검색하고 편의시설 검색을 실행해 주세요.", icon=None)
+        return
+
+    user_lat  = st.session_state.user_lat
+    user_lon  = st.session_state.user_lon
+    user_cfg  = config.USER_TYPES[st.session_state.get("user_type_radio", "일반")]
+    gungu     = st.session_state.get("searched_gungu", "")
+
+    # ── 섹션 1: 주변 장애인 화장실 ─────────────────────────────────
+    st.markdown("### 🚻 주변 장애인 화장실")
+    st.caption("검색한 지역 내 장애인 화장실 보유 시설을 거리순으로 표시합니다.")
+
+    _toilet_facs = sorted(
+        [(haversine(user_lat, user_lon, f["lat"], f["lon"]), f)
+         for f in st.session_state.norm_facilities if f.get("has_toilet")],
+        key=lambda x: x[0],
+    )[:5]
+
+    if not _toilet_facs:
+        st.warning("검색된 시설 중 장애인 화장실 보유 시설이 없습니다. 검색 지역을 바꿔보세요.")
+    else:
+        _tm = folium.Map(location=[user_lat, user_lon], zoom_start=15)
+        folium.Marker(
+            [user_lat, user_lon], tooltip="현재 위치",
+            icon=folium.Icon(color="blue", icon="user", prefix="fa"),
+        ).add_to(_tm)
+        for _ti, (_td, _tf) in enumerate(_toilet_facs):
+            folium.Marker(
+                [_tf["lat"], _tf["lon"]],
+                tooltip=f"{'🥇' if _ti == 0 else f'#{_ti+1}'} {_tf['name']} ({_td:.0f}m)",
+                icon=folium.Icon(color="red" if _ti == 0 else "orange", icon="info-sign"),
+            ).add_to(_tm)
+        _tn_d, _tn_f = _toilet_facs[0]
+        try:
+            _tr, _ = _cached_walking_route(user_lat, user_lon, _tn_f["lat"], _tn_f["lon"])
+            folium.PolyLine(_tr, color="#1565C0", weight=5).add_to(_tm)
+        except Exception:
+            folium.PolyLine(
+                [[user_lat, user_lon], [_tn_f["lat"], _tn_f["lon"]]],
+                color="#1565C0", weight=4, dash_array="8",
+            ).add_to(_tm)
+        st_folium(_tm, width="100%", height=380, key="toilet_map_t3")
+        for _ti, (_td, _tf) in enumerate(_toilet_facs):
+            _eta = _td / user_cfg["speed_mpm"]
+            st.markdown(
+                f"**{'🥇' if _ti == 0 else f'#{_ti+1}'}  {_tf['name']}** &nbsp; "
+                f"{_td:.0f}m · 도보 약 {_eta:.0f}분  \n"
+                f"<small>{_tf.get('address', '')}</small>",
+                unsafe_allow_html=True,
+            )
+
+    # ── 섹션 2: 지하철 엘리베이터 현황 ──────────────────────────────
+    if not config.SEOUL_OPEN_KEY:
+        return
+
+    st.divider()
+    st.markdown("### 🚇 지하철 엘리베이터 현황 (서울)")
+    st.caption("서울교통공사 실시간 엘리베이터 운행 정보입니다. (5분 캐시)")
+
+    _elev_rows = _cached_subway_elevators(config.SEOUL_OPEN_KEY)
+    if not _elev_rows:
+        st.warning("서울 열린데이터광장 API 응답이 없습니다.")
+        return
+
+    # 검색한 지역(gungu)으로 기본 필터 — 사용자가 수정 가능
+    _default_q = gungu or ""
+    _search_station = st.text_input(
+        "역 이름 검색",
+        value=_default_q,
+        placeholder="예: 강남, 홍대입구",
+        key="subway_elev_search_t3",
+        help="검색한 지역 이름이 자동 입력됩니다. 직접 수정할 수 있습니다.",
+    )
+
+    _filtered = [
+        r for r in _elev_rows
+        if not _search_station or _search_station in r.get("STATN_NM", "")
+    ][:60]
+
+    if not _filtered:
+        st.info("검색 결과가 없습니다. 역 이름을 수정해 보세요.")
+        return
+
+    _normal = sum(1 for r in _filtered if "정상" in r.get("ELVTR_STTS", ""))
+    _broken = len(_filtered) - _normal
+    _c1, _c2, _c3 = st.columns(3)
+    _c1.metric("🔍 조회 엘리베이터", f"{len(_filtered)}대")
+    _c2.metric("✅ 정상 운행", f"{_normal}대")
+    _c3.metric("🔴 고장·점검", f"{_broken}대",
+               delta=f"-{_broken}" if _broken else None,
+               delta_color="inverse")
+
+    if _broken:
+        st.error(f"⚠️ 고장·점검 중인 엘리베이터 {_broken}대가 있습니다. 이동 전 확인해 주세요.")
+
+    st.markdown("---")
+    for _r in _filtered:
+        _stts = _r.get("ELVTR_STTS", "")
+        _icon = "✅" if "정상" in _stts else "🔴"
+        st.markdown(
+            f"{_icon} **{_r.get('STATN_NM', '')}역** — {_r.get('ELVTR_LOCA', '')} ({_stts})"
+        )
+
+
 # ---------------------------------------------------------------------------
-# 탭 구성 — 편의시설 검색 | 길찾기
+# 탭 구성 — 편의시설 검색 | 길찾기 | 접근성 정보
 # ---------------------------------------------------------------------------
 
-tab1, tab2 = st.tabs(["🗺️ 편의시설 검색", "🧭 길찾기"])
+tab1, tab2, tab3 = st.tabs(["🗺️ 편의시설 검색", "🧭 길찾기", "♿ 접근성 정보"])
 
 with tab1:
     _tab1_content()
@@ -1895,3 +1920,6 @@ with tab2:
                                 f'</div>',
                                 unsafe_allow_html=True,
                             )
+
+with tab3:
+    _tab3_content()
