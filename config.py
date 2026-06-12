@@ -48,7 +48,7 @@ WEIGHTS = {
     "wheelchair": USER_TYPES["휠체어 사용자"]["weights"],
 }
 
-TOP_N = 10
+TOP_N = 5
 
 # --- 시설 카테고리 (여러 faclTyCd를 묶어 UI에서 빠른 필터로 사용) ---
 CATEGORIES: dict[str, list[str]] = {

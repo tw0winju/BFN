@@ -929,8 +929,8 @@ def _tab1_content() -> None:
 
     with col_list:
         st.subheader(f"🏆 추천 TOP {config.TOP_N}")
-        st.caption(f"총 {len(top_facilities)}개 · 스크롤하여 더 보기 ↕")
-        with st.container(height=600, border=True):
+        st.caption(f"이용자 유형·편의시설 보유 현황 기반 상위 {config.TOP_N}곳")
+        with st.container(border=True):
             for rank, fac in enumerate(top_facilities, start=1):
                 _nid   = fac.get("_node_id")
                 _d_m   = score_dist.get(_nid, float("inf")) if _nid else float("inf")
