@@ -16,8 +16,9 @@ def _secret(key: str) -> str:
     except Exception:
         return os.getenv(key, "")
 
-DATA_GO_KR_KEY = _secret("DATA_GO_KR_KEY")
-KAKAO_REST_KEY = _secret("KAKAO_REST_KEY")
+DATA_GO_KR_KEY  = _secret("DATA_GO_KR_KEY")
+KAKAO_REST_KEY  = _secret("KAKAO_REST_KEY")
+SEOUL_OPEN_KEY  = _secret("SEOUL_OPEN_KEY")   # 서울 열린데이터광장 (지하철 엘리베이터 현황)
 
 # --- 그래프 ---
 GRAPH_RADIUS_M = 400        # 노드 간 엣지 연결 반경 (기본값, UI 슬라이더로 조정 가능)

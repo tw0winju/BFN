@@ -107,6 +107,20 @@ def _cached_walking_route_waypoints(
     return get_walking_route_waypoints(list(waypoints), wheelchair=wheelchair)
 
 
+@st.cache_data(show_spinner=False, ttl=300)  # 5분 — 실시간 고장 정보
+def _cached_subway_elevators(seoul_key: str) -> list[dict]:
+    """서울 열린데이터광장 지하철 엘리베이터 실시간 현황
+    API: ElevatorInfoNew (서울교통공사 1~9호선)
+    """
+    url = f"http://openapi.seoul.go.kr:8088/{seoul_key}/json/ElevatorInfoNew/1/1000/"
+    try:
+        resp = requests.get(url, timeout=6)
+        rows = resp.json().get("ElevatorInfoNew", {}).get("row", [])
+        return rows
+    except Exception:
+        return []
+
+
 def _calc_route_stats(route_coords: list[tuple]) -> tuple[float, int]:
     total_m = sum(
         haversine(route_coords[i][0], route_coords[i][1],
@@ -417,6 +431,15 @@ with st.sidebar:
         disabled=not bool(st.session_state.selected_place),
     )
 
+    toilet_btn = st.button(
+        "🚻 화장실 긴급 검색",
+        use_container_width=True,
+        disabled=not bool(st.session_state.get("user_lat")),
+        help="현재 위치 기준 가장 가까운 장애인 화장실을 즉시 안내합니다.",
+    )
+    if toilet_btn:
+        st.session_state["emergency_toilet"] = True
+
     # ── 고급 설정 ─────────────────────────────────────────────
     with st.expander("⚙️ 고급 설정 (선택)"):
         st.caption("기본값으로도 충분히 동작합니다.")
@@ -681,6 +704,84 @@ def _tab1_content() -> None:
         st.markdown("**📂 카테고리 재선택**")
         _render_cat_buttons("e")
         return
+
+    # ── 긴급 화장실 찾기 ────────────────────────────────────────
+    if st.session_state.get("emergency_toilet"):
+        st.session_state["emergency_toilet"] = False
+        with st.expander("🚻 긴급 화장실 찾기 결과", expanded=True):
+            _toilet_facs = sorted(
+                [(haversine(user_lat, user_lon, f["lat"], f["lon"]), f)
+                 for f in st.session_state.norm_facilities if f.get("has_toilet")],
+                key=lambda x: x[0],
+            )[:5]
+            if not _toilet_facs:
+                st.warning("현재 검색된 시설 중 장애인 화장실 보유 시설이 없습니다. 검색 지역을 바꿔보세요.")
+            else:
+                _tm = folium.Map(location=[user_lat, user_lon], zoom_start=15)
+                folium.Marker(
+                    [user_lat, user_lon], tooltip="현재 위치",
+                    icon=folium.Icon(color="blue", icon="user", prefix="fa"),
+                ).add_to(_tm)
+                for _ti, (_td, _tf) in enumerate(_toilet_facs):
+                    folium.Marker(
+                        [_tf["lat"], _tf["lon"]],
+                        tooltip=f"{'🥇' if _ti == 0 else f'#{_ti+1}'} {_tf['name']} ({_td:.0f}m)",
+                        icon=folium.Icon(color="red" if _ti == 0 else "orange", icon="info-sign"),
+                    ).add_to(_tm)
+                # 최근접 경로
+                _tn_d, _tn_f = _toilet_facs[0]
+                try:
+                    _tr, _ = _cached_walking_route(user_lat, user_lon, _tn_f["lat"], _tn_f["lon"])
+                    folium.PolyLine(_tr, color="#1565C0", weight=5).add_to(_tm)
+                except Exception:
+                    folium.PolyLine(
+                        [[user_lat, user_lon], [_tn_f["lat"], _tn_f["lon"]]],
+                        color="#1565C0", weight=4, dash_array="8",
+                    ).add_to(_tm)
+                st_folium(_tm, width="100%", height=380, key="toilet_map")
+                for _ti, (_td, _tf) in enumerate(_toilet_facs):
+                    _eta = _td / (user_cfg["speed_mpm"])
+                    st.markdown(
+                        f"**{'🥇' if _ti == 0 else f'#{_ti+1}'}  {_tf['name']}** &nbsp; "
+                        f"{_td:.0f}m · 도보 약 {_eta:.0f}분  \n"
+                        f"<small>{_tf.get('address','')}</small>",
+                        unsafe_allow_html=True,
+                    )
+
+    # ── 지하철 엘리베이터 현황 ────────────────────────────────────
+    if config.SEOUL_OPEN_KEY:
+        with st.expander("🚇 주변 지하철 엘리베이터 현황 (서울)", expanded=False):
+            _elev_rows = _cached_subway_elevators(config.SEOUL_OPEN_KEY)
+            if not _elev_rows:
+                st.warning("서울 열린데이터광장 API 응답이 없습니다.")
+            else:
+                # 현재 위치 기준 역명으로 필터 — 좌표 없으므로 전체 표시 후 검색
+                _search_station = st.text_input(
+                    "역 이름 검색", placeholder="예: 강남, 홍대입구",
+                    key="subway_elev_search",
+                )
+                _filtered = [
+                    r for r in _elev_rows
+                    if not _search_station or _search_station in r.get("STATN_NM", "")
+                ][:50]
+                if not _filtered:
+                    st.info("검색 결과가 없습니다.")
+                else:
+                    _normal   = sum(1 for r in _filtered if "정상" in r.get("ELVTR_STTS", ""))
+                    _broken   = len(_filtered) - _normal
+                    _c1, _c2 = st.columns(2)
+                    _c1.metric("✅ 정상 운행", f"{_normal}대")
+                    _c2.metric("🔴 고장", f"{_broken}대",
+                               delta=f"-{_broken}" if _broken else None,
+                               delta_color="inverse")
+                    for _r in _filtered:
+                        _stts = _r.get("ELVTR_STTS", "")
+                        _icon = "✅" if "정상" in _stts else "🔴"
+                        st.markdown(
+                            f"{_icon} **{_r.get('STATN_NM','')}역** "
+                            f"— {_r.get('ELVTR_LOCA','')} "
+                            f"({_r.get('ELVTR_STTS','')})"
+                        )
 
     # 출발지로부터 거리 계산 후 가까운 순 정렬 (진단 정보 및 UX용)
     _fac_dists = sorted(
