@@ -1,0 +1,52 @@
+# 환경변수 (API 키) — 절대 커밋 금지
+.env
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# 가상환경
+.venv/
+venv/
+env/
+.conda/
+
+# API 캐시 (응답 데이터 포함)
+data/cache.json
+cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Ruff
+.ruff_cache/
+
+# 문서
+*.docx
+*.pptx
+*.xlsx
+*.pdf
+*.png
+*.csv
+*.ipynb
+
+# Streamlit
+.streamlit/secrets.toml
+
+data/
+
+기말프로젝트_이음길조*
