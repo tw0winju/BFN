@@ -85,7 +85,7 @@ KAKAO_REST_KEY=카카오_REST_API_키
 
 | API | 발급처 | 비고 |
 |---|---|---|
-| 장애인편의시설 현황 | [공공데이터포털](https://www.data.go.kr) → 활용신청 | 무료 |
+| 장애인편의시설 현황 | [공공데이터포털](https://www.data.go.kr/data/15100058/standard.do?recommendDataYn=Y) → 활용신청 | 무료 |
 | 카카오 로컬 API | [카카오 개발자센터](https://developers.kakao.com) → 앱 생성 | 카카오맵 활성화 필수 |
 
 ### 3. 실행
