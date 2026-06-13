@@ -14,6 +14,13 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 import config
+from modules.module5_welfare_job import (
+    fetch_central_welfare,
+    fetch_disability_jobs,
+    fetch_local_welfare,
+    normalize_jobs,
+    normalize_welfare,
+)
 from modules.module1_data import (
     Trie,
     build_region_trie,
@@ -1495,10 +1502,218 @@ def _tab3_content() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 탭 구성 — 편의시설 검색 | 길찾기 | 접근성 정보
+# 복지서비스 탭
 # ---------------------------------------------------------------------------
 
-tab1, tab2, tab3 = st.tabs(["🗺️ 편의시설 검색", "🧭 길찾기", "♿ 접근성 정보"])
+@st.cache_data(show_spinner=False, ttl=3600)
+def _cached_local_welfare(api_key: str, sido: str) -> list[dict]:
+    raw = fetch_local_welfare(api_key, sido, num=100)
+    return normalize_welfare(raw, source="지자체")
+
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def _cached_central_welfare(api_key: str) -> list[dict]:
+    raw = fetch_central_welfare(api_key, num=100)
+    return normalize_welfare(raw, source="중앙부처")
+
+
+def _tab4_content() -> None:
+    """복지 서비스 추천 탭"""
+    st.markdown("### 🤝 장애인 복지 서비스 추천")
+    st.caption("검색한 지역 기반 지자체 + 중앙부처 복지서비스를 통합 조회합니다.")
+
+    if not config.DATA_GO_KR_KEY:
+        st.error("공공데이터포털 API 키(`DATA_GO_KR_KEY`)가 필요합니다.")
+        return
+
+    sido = st.session_state.get("searched_sido", "")
+    gungu = st.session_state.get("searched_gungu", "")
+
+    if not sido:
+        st.info("📍 먼저 **편의시설 검색** 탭에서 위치를 검색해 주세요.")
+        return
+
+    st.markdown(f"**검색 지역:** {sido} {gungu}".strip())
+
+    # ── 키워드 필터 ───────────────────────────────────────────────
+    kw_filter = st.text_input(
+        "서비스명 검색",
+        placeholder="예: 활동지원, 보조기기, 취업",
+        key="welfare_kw",
+    )
+    source_filter = st.radio(
+        "출처",
+        ["전체", "지자체", "중앙부처"],
+        horizontal=True,
+        key="welfare_source",
+    )
+
+    # ── 데이터 조회 ───────────────────────────────────────────────
+    with st.spinner("복지서비스 조회 중..."):
+        local_items   = _cached_local_welfare(config.DATA_GO_KR_KEY, sido)
+        central_items = _cached_central_welfare(config.DATA_GO_KR_KEY)
+
+    if source_filter == "지자체":
+        items = local_items
+    elif source_filter == "중앙부처":
+        items = central_items
+    else:
+        # [자료구조] List: 지자체+중앙부처 합산, ID 기준 중복 제거
+        # [알고리즘] 선형탐색으로 중복 wlfareInfoId 제거 (Set 사용)
+        seen: set[str] = set()
+        items = []
+        for it in local_items + central_items:
+            uid = it.get("id", "") or it.get("name", "")
+            if uid not in seen:
+                seen.add(uid)
+                items.append(it)
+
+    # 키워드 필터
+    if kw_filter.strip():
+        kw = kw_filter.strip()
+        items = [it for it in items
+                 if kw in it.get("name", "") or kw in it.get("summary", "")]
+
+    if not items:
+        st.warning(
+            "조회된 장애인 복지서비스가 없습니다.\n\n"
+            "- 공공데이터포털에서 해당 API 활용 신청이 완료되었는지 확인해 주세요.\n"
+            "- 신청 링크: https://www.data.go.kr/data/15108347/openapi.do\n"
+            "- 승인 즉시 사용 가능 (자동승인)"
+        )
+        return
+
+    st.success(f"**{len(items)}개** 서비스 조회됨")
+
+    for it in items:
+        with st.expander(
+            f"**{it['name']}** "
+            f"{'🏛️' if it['source'] == '중앙부처' else '🏢'} {it['source']}"
+        ):
+            if it.get("summary"):
+                st.markdown(f"**개요**  \n{it['summary']}")
+            if it.get("target"):
+                st.markdown(f"**지원 대상**  \n{it['target']}")
+            if it.get("criteria"):
+                st.markdown(f"**선정 기준**  \n{it['criteria']}")
+            if it.get("apply"):
+                st.markdown(f"**신청 방법**  \n{it['apply']}")
+            if it.get("contact"):
+                st.markdown(f"**문의**  \n{it['contact']}")
+            if it.get("theme"):
+                st.caption(f"주제: {it['theme']}")
+
+
+# ---------------------------------------------------------------------------
+# 취업정보 탭
+# ---------------------------------------------------------------------------
+
+@st.cache_data(show_spinner=False, ttl=600)  # 10분 — 실시간 구인
+def _cached_jobs(api_key: str, sido: str, category: str) -> list[dict]:
+    raw = fetch_disability_jobs(api_key, sido=sido, job_category=category, num=50)
+    return normalize_jobs(raw)
+
+
+_JOB_CATEGORIES = [
+    "전체", "사무직", "서비스직", "판매직", "생산직", "전문직",
+    "IT·정보통신", "디자인", "교육", "의료·복지", "기타",
+]
+
+
+def _tab5_content() -> None:
+    """장애인 취업 정보 탭"""
+    st.markdown("### 💼 장애인 구인 현황")
+    st.caption("한국장애인고용공단 실시간 구인 정보 (10분 캐시)")
+
+    if not config.DATA_GO_KR_KEY:
+        st.error("공공데이터포털 API 키(`DATA_GO_KR_KEY`)가 필요합니다.")
+        return
+
+    sido = st.session_state.get("searched_sido", "")
+
+    # ── 필터 ─────────────────────────────────────────────────────
+    _fc1, _fc2 = st.columns([2, 1])
+    with _fc1:
+        sido_input = st.text_input(
+            "지역",
+            value=sido,
+            placeholder="예: 서울, 경기",
+            key="job_sido_input",
+        )
+    with _fc2:
+        cat_sel = st.selectbox("직종", _JOB_CATEGORIES, key="job_category_sel")
+
+    search_jobs_btn = st.button("🔍 구인 정보 조회", type="primary", key="job_search_btn")
+    if search_jobs_btn:
+        st.session_state["job_search_trigger"] = {
+            "sido": sido_input,
+            "category": "" if cat_sel == "전체" else cat_sel,
+        }
+
+    trigger = st.session_state.get("job_search_trigger")
+    if not trigger:
+        if sido:
+            # 편의시설 검색한 지역이 있으면 자동으로 첫 조회
+            st.session_state["job_search_trigger"] = {"sido": sido, "category": ""}
+            st.rerun()
+        else:
+            st.info("📍 지역을 입력하거나 편의시설 검색 탭에서 위치를 먼저 검색해 주세요.")
+            return
+
+    with st.spinner("구인 정보 조회 중..."):
+        jobs = _cached_jobs(
+            config.DATA_GO_KR_KEY,
+            trigger["sido"],
+            trigger["category"],
+        )
+
+    if not jobs:
+        st.warning(
+            "구인 정보가 없습니다.\n\n"
+            "- 공공데이터포털에서 해당 API 활용 신청을 완료해 주세요.\n"
+            "- 신청 링크: https://www.data.go.kr/data/15117692/openapi.do\n"
+            "- 승인 즉시 사용 가능 (자동승인)"
+        )
+        return
+
+    region_label = trigger["sido"] or "전국"
+    cat_label    = trigger["category"] or "전체 직종"
+    st.success(f"**{region_label}** · **{cat_label}** 구인 **{len(jobs)}건**")
+
+    for job in jobs:
+        deadline = job.get("deadline", "")
+        _badge = f"⏰ {deadline}" if deadline else ""
+        with st.expander(
+            f"**{job.get('company', '회사명 없음')}** — {job.get('job', '직종 미상')} {_badge}"
+        ):
+            _j1, _j2 = st.columns(2)
+            with _j1:
+                if job.get("employ"):
+                    st.markdown(f"**고용형태** {job['employ']}")
+                if job.get("salary"):
+                    st.markdown(f"**급여** {job['salary']}")
+                if job.get("career"):
+                    st.markdown(f"**경력** {job['career']}")
+                if job.get("edu"):
+                    st.markdown(f"**학력** {job['edu']}")
+            with _j2:
+                if job.get("count"):
+                    st.markdown(f"**채용인원** {job['count']}명")
+                if job.get("biz_type"):
+                    st.markdown(f"**기업유형** {job['biz_type']}")
+                if job.get("contact"):
+                    st.markdown(f"**문의** {job['contact']}")
+            if job.get("address"):
+                st.caption(f"📍 {job['address']}")
+
+
+# ---------------------------------------------------------------------------
+# 탭 구성 — 편의시설 검색 | 길찾기 | 접근성 정보 | 복지서비스 | 취업정보
+# ---------------------------------------------------------------------------
+
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "🗺️ 편의시설 검색", "🧭 길찾기", "♿ 접근성 정보", "🤝 복지 서비스", "💼 취업 정보",
+])
 
 with tab1:
     _tab1_content()
@@ -1923,3 +2138,9 @@ with tab2:
 
 with tab3:
     _tab3_content()
+
+with tab4:
+    _tab4_content()
+
+with tab5:
+    _tab5_content()
