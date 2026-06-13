@@ -23,9 +23,10 @@ FACILITY_DETAIL_URL = (
     "/getFacInfoOpenApiJpEvalInfoList"
 )
 # 데이터 출처: 카카오 로컬 API (카카오 개발자센터) — 주소→좌표 변환, 키워드 장소 검색
-KAKAO_GEOCODE_URL  = "https://dapi.kakao.com/v2/local/search/address.json"
-KAKAO_KEYWORD_URL  = "https://dapi.kakao.com/v2/local/search/keyword.json"
-KAKAO_REGION_URL   = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
+KAKAO_GEOCODE_URL   = "https://dapi.kakao.com/v2/local/search/address.json"
+KAKAO_KEYWORD_URL   = "https://dapi.kakao.com/v2/local/search/keyword.json"
+KAKAO_REGION_URL    = "https://dapi.kakao.com/v2/local/geo/coord2regioncode.json"
+KAKAO_CATEGORY_URL  = "https://dapi.kakao.com/v2/local/search/category.json"
 
 CACHE_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "cache.json")
 CACHE_TTL_SEC = 60 * 60 * 24  # 24시간
@@ -391,6 +392,90 @@ def search_places(keyword: str, kakao_key: str, max_results: int = 10) -> list[d
         return results
     except requests.RequestException as e:
         print(f"[module1] 장소 검색 오류: {e}")
+        return []
+
+
+# 카카오 카테고리 코드 — 병원·약국 근거리 검색에 사용
+# HP8: 병원  PM9: 약국
+KAKAO_MEDICAL_CODES: dict[str, str] = {
+    "병원":   "HP8",
+    "약국":   "PM9",
+}
+
+
+def search_nearby(
+    kakao_key: str,
+    user_lat: float,
+    user_lon: float,
+    category_code: str = "",
+    keyword: str = "",
+    radius_m: int = 2000,
+    max_results: int = 15,
+) -> list[dict]:
+    """카카오 로컬 API — 현재 위치 반경 내 병원·약국 등 카테고리/키워드 검색 (거리순)
+    [자료구조] List[Dict]: 검색 결과 장소 목록
+    [알고리즘] 선형탐색: 응답 docs 순회하여 표준 스키마로 변환
+
+    category_code 우선 사용. 없으면 keyword로 KAKAO_KEYWORD_URL에 위치 파라미터 추가.
+    반환 항목: {name, address, lat, lon, category, distance_m}
+    """
+    if not kakao_key:
+        return []
+    headers = {"Authorization": f"KakaoAK {kakao_key}"}
+
+    def _parse(docs: list) -> list[dict]:
+        # [알고리즘] 선형탐색: 카카오 docs 배열 순회 → 표준 스키마 변환
+        result = []
+        for doc in docs:
+            lat = float(doc.get("y", 0) or 0)
+            lon = float(doc.get("x", 0) or 0)
+            if not lat or not lon:
+                continue
+            result.append({
+                "name":       doc.get("place_name", ""),
+                "address":    doc.get("road_address_name") or doc.get("address_name", ""),
+                "lat":        lat,
+                "lon":        lon,
+                "category":   doc.get("category_name", "").split(" > ")[-1],
+                "distance_m": int(doc.get("distance", 0) or 0),
+                "phone":      doc.get("phone", ""),
+                "place_url":  doc.get("place_url", ""),
+            })
+        return result
+
+    try:
+        if category_code:
+            resp = requests.get(
+                KAKAO_CATEGORY_URL,
+                headers=headers,
+                params={
+                    "category_group_code": category_code,
+                    "x":      user_lon,
+                    "y":      user_lat,
+                    "radius": min(radius_m, 20000),
+                    "size":   min(max_results, 15),
+                    "sort":   "distance",
+                },
+                timeout=5,
+            )
+        else:
+            resp = requests.get(
+                KAKAO_KEYWORD_URL,
+                headers=headers,
+                params={
+                    "query":  keyword,
+                    "x":      user_lon,
+                    "y":      user_lat,
+                    "radius": min(radius_m, 20000),
+                    "size":   min(max_results, 15),
+                    "sort":   "distance",
+                },
+                timeout=5,
+            )
+        resp.raise_for_status()
+        return _parse(resp.json().get("documents", []))
+    except requests.RequestException as e:
+        print(f"[module1] 근거리 검색 오류: {e}")
         return []
 
 

@@ -22,6 +22,7 @@ from modules.module5_welfare_job import (
     normalize_welfare,
 )
 from modules.module1_data import (
+    KAKAO_MEDICAL_CODES,
     Trie,
     build_region_trie,
     fetch_facilities,
@@ -29,6 +30,7 @@ from modules.module1_data import (
     normalize,
     parse_region,
     reverse_geocode,
+    search_nearby,
     search_places,
 )
 from modules.module2_path import (
@@ -102,6 +104,19 @@ def _cached_walking_route(
 def _cached_overpass(route_coords_key: tuple) -> list[dict]:
     """경로 주변 Overpass 접근성 인프라 조회 캐싱 (좌표 튜플을 키로 사용)"""
     return fetch_overpass_accessibility(list(route_coords_key))
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def _cached_search_nearby(
+    kakao_key: str, user_lat: float, user_lon: float,
+    category_code: str, keyword: str, radius_m: int,
+) -> list[dict]:
+    """병원·약국 근거리 카카오 검색 캐싱 (10분)"""
+    return search_nearby(
+        kakao_key, user_lat, user_lon,
+        category_code=category_code, keyword=keyword,
+        radius_m=radius_m, max_results=15,
+    )
 
 
 @st.cache_data(show_spinner=False, ttl=3600)
@@ -1724,193 +1739,143 @@ with tab1:
     _tab1_content()
 
 with tab2:
-    st.markdown("### 🧭 길찾기")
-    st.caption("출발지에서 목적지까지 보행 경로와 경로 주변 접근 가능한 편의시설을 안내합니다.")
+    st.markdown("### 🧭 병원·약국 길찾기")
+    st.caption("현재 위치 기준 가까운 병원·약국을 검색하고 배리어프리 보행 경로를 안내합니다.")
 
     if not st.session_state.get("selected_place"):
         st.markdown("<br>", unsafe_allow_html=True)
         st.info("📍 먼저 **사이드바**에서 출발 위치를 검색하고 선택해 주세요.", icon=None)
     else:
         _sp = st.session_state.selected_place
+        user_lat_nav = _sp["lat"]
+        user_lon_nav = _sp["lon"]
 
-        # ── 출발지 / 목적지 입력 ────────────────────────────────
-        _nav_c1, _nav_c2 = st.columns(2)
+        # ── 시설 유형 선택 ────────────────────────────────────────
+        _PLACE_OPTIONS = {
+            "🏥 병원":   ("HP8", ""),
+            "💊 약국":   ("PM9", ""),
+            "🦷 치과":   ("",    "치과"),
+            "🌿 한의원": ("",    "한의원"),
+            "🏥 보건소": ("",    "보건소"),
+        }
+        _nav_c1, _nav_c2 = st.columns([3, 1])
         with _nav_c1:
-            st.markdown("**🚶 출발지**")
-            st.success(f"**{_sp['name']}**\n\n📍 {_sp['address']}")
-
-        with _nav_c2:
-            st.markdown("**🏁 목적지**")
-            _dest_q = st.text_input(
-                "목적지 검색",
-                placeholder="장소명 또는 주소 입력 (예: 강남구청)",
-                label_visibility="collapsed",
-                key="dest_query_nav",
+            _place_type = st.radio(
+                "시설 유형",
+                list(_PLACE_OPTIONS.keys()),
+                horizontal=True,
+                key="nav_place_type",
             )
-            _dest_search_btn = st.button("🔎 검색", key="dest_search_btn_nav", use_container_width=True)
+        with _nav_c2:
+            _nav_radius = st.select_slider(
+                "반경",
+                options=[500, 1000, 2000, 3000, 5000],
+                value=2000,
+                format_func=lambda v: f"{v//1000}km" if v >= 1000 else f"{v}m",
+                key="nav_radius",
+            )
 
-        if _dest_search_btn:
-            if not _dest_q.strip():
-                st.warning("목적지를 입력해 주세요.")
-            elif not config.KAKAO_REST_KEY:
+        _cat_code, _kw = _PLACE_OPTIONS[_place_type]
+
+        _nav_search_btn = st.button(
+            f"🔍 주변 {_place_type.split()[-1]} 검색",
+            type="primary",
+            key="nav_search_btn",
+            use_container_width=True,
+        )
+        if _nav_search_btn:
+            if not config.KAKAO_REST_KEY:
                 st.error("카카오 API 키가 없습니다.")
             else:
-                with st.spinner("목적지 검색 중..."):
-                    _dr = search_places(_dest_q, config.KAKAO_REST_KEY, max_results=5)
-                st.session_state.route_dest_results   = _dr
-                st.session_state.route_dest_place     = None
-                st.session_state.route_nav_coords     = None
+                with st.spinner(f"주변 {_place_type.split()[-1]} 검색 중..."):
+                    _nearby = _cached_search_nearby(
+                        config.KAKAO_REST_KEY,
+                        user_lat_nav, user_lon_nav,
+                        _cat_code, _kw, _nav_radius,
+                    )
+                st.session_state.nav_nearby_results = _nearby
+                st.session_state.route_dest_place   = None
+                st.session_state.route_nav_coords   = None
                 st.session_state.route_nav_facilities = None
                 st.session_state.route_nav_elev_cnt   = None
 
-        if st.session_state.route_dest_results is not None:
-            _dr = st.session_state.route_dest_results
-            if not _dr:
-                st.warning("검색 결과가 없습니다. 다른 검색어를 시도해 보세요.")
+        # ── 검색 결과 목록 ────────────────────────────────────────
+        _nearby_results = st.session_state.get("nav_nearby_results")
+        if _nearby_results is not None:
+            if not _nearby_results:
+                st.warning(f"반경 {_nav_radius}m 내에 결과가 없습니다. 반경을 늘려보세요.")
             else:
-                st.caption("목적지를 선택하세요")
-                _sel_dest_idx = st.radio(
+                st.success(f"**{len(_nearby_results)}곳** 검색됨 — 선택하면 경로를 안내합니다")
+
+                _sel_idx = st.radio(
                     "목적지 선택",
-                    options=range(len(_dr)),
+                    options=range(len(_nearby_results)),
                     format_func=lambda i: (
-                        f"{_dr[i]['name']}  "
-                        + (f"·  {_dr[i]['category']}  " if _dr[i]["category"] else "")
-                        + f"📍 {_dr[i]['address']}"
+                        f"{_nearby_results[i]['name']}  "
+                        f"📍 {_nearby_results[i]['address']}  "
+                        f"({_nearby_results[i]['distance_m']}m)"
                     ),
                     label_visibility="collapsed",
-                    key="dest_radio_nav",
+                    key="nav_nearby_radio",
                 )
-                st.session_state.route_dest_place = _dr[_sel_dest_idx]
+                _dest_selected = _nearby_results[_sel_idx]
 
-        if st.session_state.route_dest_place:
-            _dest = st.session_state.route_dest_place
+                # 전화번호 표시
+                if _dest_selected.get("phone"):
+                    st.caption(f"📞 {_dest_selected['phone']}")
 
-            st.divider()
-            _nav_u_cfg = config.USER_TYPES[user_type]
-            st.caption(f"이용자 유형: {_USER_TYPE_LABEL.get(user_type, user_type)}")
-            if _nav_u_cfg["accessible_path"]:
-                st.info("♿ 경로 주변에서 엘리베이터·경사로가 있는 시설을 우선 표시합니다.")
+                _nav_route_btn = st.button(
+                    f"🧭 {_dest_selected['name']} 길찾기",
+                    type="primary",
+                    key="nav_route_btn",
+                    use_container_width=True,
+                )
 
-            _nav_route_btn = st.button(
-                "🧭 경로 탐색", type="primary", key="nav_route_btn", use_container_width=True,
-            )
+                if _nav_route_btn:
+                    st.session_state.route_dest_place = _dest_selected
+                    _d_lat = _dest_selected["lat"]
+                    _d_lon = _dest_selected["lon"]
+                    _is_wheelchair = (user_type == "휠체어 사용자")
 
-            if _nav_route_btn:
-                _o_lat, _o_lon = _sp["lat"], _sp["lon"]
-                _d_lat, _d_lon = _dest["lat"], _dest["lon"]
+                    _nav_route = None
+                    _nav_elev_cnt = 0
+                    _nav_route_err = ""
+                    with st.spinner("🗺️ 보행 경로 계산 중… (최대 60초)"):
+                        try:
+                            _nav_route, _nav_elev_cnt = _cached_walking_route(
+                                user_lat_nav, user_lon_nav, _d_lat, _d_lon,
+                                wheelchair=_is_wheelchair,
+                            )
+                        except Exception as _e:
+                            _nav_route_err = str(_e)
 
-                _nav_route = None
-                _nav_elev_cnt = 0
-                _nav_route_err = ""
-                _is_wheelchair = (user_type == "휠체어 사용자")
-                with st.spinner("🗺️ 보행 경로 계산 중… (최대 60초)"):
-                    try:
-                        _nav_route, _nav_elev_cnt = _cached_walking_route(
-                            _o_lat, _o_lon, _d_lat, _d_lon,
-                            wheelchair=_is_wheelchair,
+                    if not _nav_route:
+                        _err_msg = (
+                            "♿ 계단 없는 접근 경로를 찾을 수 없습니다."
+                            if _is_wheelchair
+                            else "경로를 찾을 수 없습니다."
                         )
-                    except Exception as _e:
-                        _nav_route_err = str(_e)
-
-                if not _nav_route:
-                    if _is_wheelchair:
-                        _err_msg = "♿ 계단 없는 접근 경로를 찾을 수 없습니다."
+                        if _nav_route_err:
+                            _err_msg += f"\n\n오류 상세: {_nav_route_err}"
+                        st.error(_err_msg)
                     else:
-                        _err_msg = "경로를 찾을 수 없습니다. 두 지점이 너무 멀거나 도로 데이터가 없을 수 있습니다."
-                    if _nav_route_err:
-                        _err_msg += f"\n\n오류 상세: {_nav_route_err}"
-                    st.error(_err_msg)
-                else:
-                    st.session_state.route_nav_coords   = _nav_route
-                    st.session_state.route_nav_elev_cnt = _nav_elev_cnt
+                        st.session_state.route_nav_coords   = _nav_route
+                        st.session_state.route_nav_elev_cnt = _nav_elev_cnt
 
-                    # 경로 5개 지점(0·25·50·75·100%)에서 역지오코딩 → 구 중복 제거 후 fetch
-                    _n = len(_nav_route)
-                    _fetch_pts = [
-                        (_o_lat, _o_lon),
-                        (_nav_route[max(0, _n // 4)][0],     _nav_route[max(0, _n // 4)][1]),
-                        (_nav_route[_n // 2][0],             _nav_route[_n // 2][1]),
-                        (_nav_route[min(_n - 1, 3 * _n // 4)][0],
-                         _nav_route[min(_n - 1, 3 * _n // 4)][1]),
-                        (_d_lat, _d_lon),
-                    ]
+                        with st.spinner("🗺️ 보행 인프라 정보 조회 중…"):
+                            _route_key = tuple(_nav_route)
+                            st.session_state.route_nav_infra = _cached_overpass(_route_key)
 
-                    with st.spinner("🏢 경로 주변 편의시설 탐색 중..."):
-                        _all_raw: list[dict] = []
-                        _seen_ids: set[str]  = set()
-                        _seen_regions: set[tuple[str, str]] = set()
+                        st.session_state.route_nav_facilities = []  # 이 탭에서는 미사용
 
-                        if config.DATA_GO_KR_KEY:
-                            for _plat, _plon in _fetch_pts:
-                                try:
-                                    _r_sido, _r_gungu = reverse_geocode(
-                                        _plat, _plon, config.KAKAO_REST_KEY
-                                    )
-                                except Exception:
-                                    continue
-                                if not _r_sido:
-                                    continue
-                                if (_r_sido, _r_gungu) in _seen_regions:
-                                    continue  # 같은 구는 한 번만 fetch
-                                _seen_regions.add((_r_sido, _r_gungu))
-                                _part = fetch_facilities(
-                                    config.DATA_GO_KR_KEY, _r_sido, _r_gungu,
-                                    num=500, user_lat=_plat, user_lon=_plon,
-                                )
-                                for _item in _part:
-                                    _fid = _item.get("wfcltId", "")
-                                    if _fid and _fid in _seen_ids:
-                                        continue
-                                    if _fid:
-                                        _seen_ids.add(_fid)
-                                    _all_raw.append(_item)
+        _dest = st.session_state.get("route_dest_place")
+        _sp = st.session_state.selected_place
 
-                        _r_norm = normalize(_all_raw, kakao_key=config.KAKAO_REST_KEY)
+        # ── 출발지 정보 표시 ─────────────────────────────────────
+        st.markdown(f"**🚶 출발지:** {_sp['name']}  \n📍 {_sp['address']}")
 
-                        # 주거시설(아파트·다세대·연립) 제외 — 전체 데이터의 ~75%를 차지하며
-                        # 보행자에게 유용하지 않아 유용한 공공·상업 시설을 묻어버림
-                        _RESIDENTIAL = {
-                            "아파트", "아파트 부대복리시설", "연립주택",
-                            "다세대주택", "기숙사",
-                        }
-                        _r_norm = [
-                            f for f in _r_norm
-                            if f.get("fac_type", "") not in _RESIDENTIAL
-                        ]
-
-                        # 경로를 50m 간격으로 샘플링 → 경로 전체 균등 커버
-                        _NEAR_M   = 400
-                        _r_sample = [_nav_route[0]]
-                        _r_acc    = 0.0
-                        for _ri in range(1, len(_nav_route)):
-                            _r_acc += haversine(
-                                _nav_route[_ri - 1][0], _nav_route[_ri - 1][1],
-                                _nav_route[_ri][0],     _nav_route[_ri][1],
-                            )
-                            if _r_acc >= 50:
-                                _r_sample.append(_nav_route[_ri])
-                                _r_acc = 0.0
-                        if _nav_route[-1] != _r_sample[-1]:
-                            _r_sample.append(_nav_route[-1])
-
-                        def _near_route_fn(f: dict) -> bool:
-                            return any(
-                                haversine(f["lat"], f["lon"], rp[0], rp[1]) <= _NEAR_M
-                                for rp in _r_sample
-                            )
-
-                        st.session_state.route_nav_facilities = [
-                            f for f in _r_norm if _near_route_fn(f)
-                        ]
-
-                    # Overpass API: 경로 주변 보행 인프라 (엘리베이터·보도턱·경사로)
-                    with st.spinner("🗺️ 보행 인프라 정보 조회 중… (OSM Overpass)"):
-                        # 경로 좌표를 튜플로 변환하여 캐시 키로 사용
-                        _route_key = tuple(st.session_state.route_nav_coords)
-                        st.session_state.route_nav_infra = _cached_overpass(_route_key)
-
-            # ── 경로 지도 렌더링 ────────────────────────────────
-            if st.session_state.route_nav_coords:
+        # ── 경로 지도 렌더링 ────────────────────────────────────
+        if _dest and st.session_state.route_nav_coords:
                 _nav_route    = st.session_state.route_nav_coords
                 _nav_facs     = st.session_state.route_nav_facilities or []
                 _nav_elev_cnt = st.session_state.route_nav_elev_cnt or 0
