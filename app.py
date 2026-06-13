@@ -192,8 +192,8 @@ def _make_sample_facilities(center_lat: float, center_lon: float) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="교통약자 편의시설 탐색기",
-    page_icon="♿",
+    page_title="장애인 생활지원 플랫폼",
+    page_icon="🌐",
     layout="wide",
 )
 
@@ -304,8 +304,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("♿ 교통약자 편의시설 탐색기")
-st.caption("휠체어·노약자·유아동반자를 위한 배리어프리 편의시설 추천 & 길찾기 | Dijkstra / A* / BFS 직접 구현")
+st.title("🌐 장애인 생활지원 플랫폼")
+st.caption("복지서비스 · 취업정보 · 배리어프리 시설 찾기 · 접근 경로 안내를 한 곳에서")
 
 # ---------------------------------------------------------------------------
 # session_state 초기화
@@ -354,8 +354,8 @@ if st.session_state.pop("_do_reset_settings", False):
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    st.markdown("### 배리어프리 내비게이터")
-    st.caption("교통약자를 위한 편의시설 추천 & 경로 안내")
+    st.markdown("### 🌐 생활지원 플랫폼")
+    st.caption("내 위치를 설정하면 복지·취업·시설 정보가 연동됩니다")
     st.divider()
 
     # ── STEP 1 ────────────────────────────────────────────────
@@ -633,7 +633,7 @@ def _tab1_content() -> None:
             st.markdown(
                 _card.format(accent="#42A5F5", icon="📍", step="1단계",
                              title="출발 위치 입력",
-                             desc="강남역, 서울시청 등<br>장소명 또는 주소로 검색 후 선택"),
+                             desc="사이드바에서 장소명 또는<br>주소로 내 위치 설정"),
                 unsafe_allow_html=True,
             )
         with c2:
@@ -647,13 +647,11 @@ def _tab1_content() -> None:
             st.markdown(
                 _card.format(accent="#66BB6A", icon="🔍", step="3단계",
                              title="검색 버튼 클릭",
-                             desc="주변 편의시설을 자동 탐색하고<br>TOP 5를 추천합니다"),
+                             desc="배리어프리 시설 TOP 5 추천<br>+ 접근 가능 경로 안내"),
                 unsafe_allow_html=True,
             )
 
-        # ── 기능 안내 ────────────────────────────────────────────
         st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("#### 주요 기능")
         fa, fb, fc = st.columns(3)
         with fa:
             st.info("**♿ 휠체어 모드**\n\n엘리베이터·경사로가 끊기지 않는 접근 가능 경로만 탐색합니다.")
@@ -662,9 +660,7 @@ def _tab1_content() -> None:
         with fc:
             st.info("**📊 알고리즘 비교**\n\nDijkstra vs A* 탐색 노드를 지도에서 직접 비교할 수 있습니다.")
 
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.caption("💡 **검색 팁:** 장소명(강남역, 가천대학교)과 주소(강남대로 15) 모두 검색 가능합니다.  \n"
-                   "지역을 비워두면 출발지 좌표로 자동 감지합니다.")
+        st.caption("💡 장소명(강남역, 가천대학교)과 주소(강남대로 15) 모두 검색 가능합니다.")
         return
 
     user_lat = st.session_state.user_lat
@@ -1522,15 +1518,20 @@ def _tab4_content() -> None:
     st.markdown("### 🤝 장애인 복지 서비스 추천")
     st.caption("검색한 지역 기반 지자체 + 중앙부처 복지서비스를 통합 조회합니다.")
 
-    if not config.DATA_GO_KR_KEY:
-        st.error("공공데이터포털 API 키(`DATA_GO_KR_KEY`)가 필요합니다.")
+    _local_key   = config.LOCAL_WELFARE_KEY   or config.DATA_GO_KR_KEY
+    _central_key = config.CENTRAL_WELFARE_KEY or config.DATA_GO_KR_KEY
+    if not _local_key:
+        st.error(
+            "`LOCAL_WELFARE_KEY` 또는 `DATA_GO_KR_KEY`가 필요합니다.  \n"
+            "공공데이터포털 → [지자체복지서비스 API](https://www.data.go.kr/data/15108347/openapi.do) 활용신청 후 `.env`에 추가해 주세요."
+        )
         return
 
-    sido = st.session_state.get("searched_sido", "")
+    sido  = st.session_state.get("searched_sido", "")
     gungu = st.session_state.get("searched_gungu", "")
 
     if not sido:
-        st.info("📍 먼저 **편의시설 검색** 탭에서 위치를 검색해 주세요.")
+        st.info("📍 먼저 사이드바에서 위치를 검색해 주세요.")
         return
 
     st.markdown(f"**검색 지역:** {sido} {gungu}".strip())
@@ -1550,8 +1551,8 @@ def _tab4_content() -> None:
 
     # ── 데이터 조회 ───────────────────────────────────────────────
     with st.spinner("복지서비스 조회 중..."):
-        local_items   = _cached_local_welfare(config.DATA_GO_KR_KEY, sido)
-        central_items = _cached_central_welfare(config.DATA_GO_KR_KEY)
+        local_items   = _cached_local_welfare(_local_key, sido)
+        central_items = _cached_central_welfare(_central_key)
 
     if source_filter == "지자체":
         items = local_items
@@ -1625,8 +1626,12 @@ def _tab5_content() -> None:
     st.markdown("### 💼 장애인 구인 현황")
     st.caption("한국장애인고용공단 실시간 구인 정보 (10분 캐시)")
 
-    if not config.DATA_GO_KR_KEY:
-        st.error("공공데이터포털 API 키(`DATA_GO_KR_KEY`)가 필요합니다.")
+    _kead_key = config.KEAD_KEY or config.DATA_GO_KR_KEY
+    if not _kead_key:
+        st.error(
+            "`KEAD_KEY` 또는 `DATA_GO_KR_KEY`가 필요합니다.  \n"
+            "공공데이터포털 → [장애인구인현황 API](https://www.data.go.kr/data/15117692/openapi.do) 활용신청 후 `.env`에 추가해 주세요."
+        )
         return
 
     sido = st.session_state.get("searched_sido", "")
@@ -1662,7 +1667,7 @@ def _tab5_content() -> None:
 
     with st.spinner("구인 정보 조회 중..."):
         jobs = _cached_jobs(
-            config.DATA_GO_KR_KEY,
+            _kead_key,
             trigger["sido"],
             trigger["category"],
         )
@@ -1708,11 +1713,11 @@ def _tab5_content() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 탭 구성 — 편의시설 검색 | 길찾기 | 접근성 정보 | 복지서비스 | 취업정보
+# 탭 구성 — 복지서비스 | 취업정보 | 시설찾기 | 길찾기 | 접근성정보
 # ---------------------------------------------------------------------------
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "🗺️ 편의시설 검색", "🧭 길찾기", "♿ 접근성 정보", "🤝 복지 서비스", "💼 취업 정보",
+tab4, tab5, tab1, tab2, tab3 = st.tabs([
+    "🤝 복지 서비스", "💼 취업 정보", "🗺️ 시설 찾기", "🧭 길찾기", "♿ 접근성 정보",
 ])
 
 with tab1:

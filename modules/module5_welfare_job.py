@@ -67,7 +67,8 @@ def _parse_response(resp: requests.Response) -> list[dict]:
 # 복지서비스
 # ─────────────────────────────────────────────────────────────────────────────
 
-def fetch_local_welfare(api_key: str, sido: str, num: int = 100) -> list[dict]:
+def fetch_local_welfare(api_key: str, sido: str, num: int = 100) -> list[dict]:  # noqa: E501
+    # api_key: LOCAL_WELFARE_KEY (공공데이터포털 15108347 인증키)
     """지자체 복지서비스 목록 — 시도 필터 + 장애인 관련 client-side 필터
     [알고리즘] 조건 필터링: 서비스명/요약에 '장애' 포함 항목만 추출
     """
@@ -86,6 +87,7 @@ def fetch_local_welfare(api_key: str, sido: str, num: int = 100) -> list[dict]:
 
 
 def fetch_central_welfare(api_key: str, num: int = 100) -> list[dict]:
+    # api_key: CENTRAL_WELFARE_KEY (공공데이터포털 15090532 인증키)
     """중앙부처 복지서비스 목록 — 전국 단위 (지역 필터 없음)"""
     params = {
         "serviceKey": api_key,

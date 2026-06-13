@@ -16,9 +16,12 @@ def _secret(key: str) -> str:
     except Exception:
         return os.getenv(key, "")
 
-DATA_GO_KR_KEY  = _secret("DATA_GO_KR_KEY")
-KAKAO_REST_KEY  = _secret("KAKAO_REST_KEY")
-SEOUL_OPEN_KEY  = _secret("SEOUL_OPEN_KEY")   # 서울 열린데이터광장 (지하철 엘리베이터 현황)
+DATA_GO_KR_KEY       = _secret("DATA_GO_KR_KEY")       # 장애인편의시설 현황 (공공데이터포털)
+KAKAO_REST_KEY       = _secret("KAKAO_REST_KEY")       # 카카오 로컬 API (좌표변환·검색)
+SEOUL_OPEN_KEY       = _secret("SEOUL_OPEN_KEY")       # 서울 열린데이터광장 (지하철 엘리베이터)
+LOCAL_WELFARE_KEY    = _secret("LOCAL_WELFARE_KEY")    # 한국사회보장정보원 지자체복지서비스 (15108347)
+CENTRAL_WELFARE_KEY  = _secret("CENTRAL_WELFARE_KEY")  # 한국사회보장정보원 중앙부처복지서비스 (15090532)
+KEAD_KEY             = _secret("KEAD_KEY")             # 한국장애인고용공단 구인실시간현황 (15117692)
 
 # --- 그래프 ---
 GRAPH_RADIUS_M = 400        # 노드 간 엣지 연결 반경 (기본값, UI 슬라이더로 조정 가능)
